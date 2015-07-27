@@ -46,33 +46,81 @@ BarWidget.prototype.render = function(parent,nextSibling) {
 };
 
 BarWidget.prototype.createChart = function(parent,nextSibling) {
-	// Get the data we're plotting
-	var data = this.wiki.getTiddlerData(this.barData),
-		n,m,stack,layers;
-	if(data) {
-		n = data.layers;
-		m = data.samples;
-		layers = data.data;
-	} else { // Use randomly generated data if we don't have any
-		n = 4; // number of layers
-		m = 58; // number of samples per layer
-		stack = d3.layout.stack();
-		layers = stack(d3.range(n).map(function() { return bumpLayer(m, 0.1); }));
+	var data, settings, i, layers =[], n;
+	// If a chart name is given than the settings and data tiddlers can be derived from the name.
+	// If a data tiddler or settings tiddler is given in addition to the chart name than they override the derived names.
+	if(this.chartName) {
+		if(this.barData) {
+			//Use the barData tiddler instead of the derived data tiddler.
+			data = this.wiki.getTiddlerData(this.barData);
+		} else {
+			//Use the data from the tiddler derived from the chart name.
+			barDataTiddler = "$:/datasets/" + this.chartName;
+			data = this.wiki.getTiddlerData(barDataTiddler);
+		}
+		if(this.settingsTiddler) {
+			//Use the given settings tiddler.
+			settings = this.wiki.getTiddlerData(this.settingsTiddler);
+		} else {
+			//Use the settings tiddler derived from the chart name.
+			barSettingsTiddler = "$:/settings/" + this.chartName;
+			settings = this.wiki.getTiddlerData(barSettingsTiddler);
+		}
+	} else {
+		//If no chart name is given use the given data and settings tiddlers.
+		settings = this.wiki.getTiddlerData(this.settingsTiddler);
+		data = this.wiki.getTiddlerData(this.barData);
 	}
+
+	var m,stack;
+	if(settings) {
+		var chartHeight = settings.height,
+		chartWidth = settings.width,
+		chartMarginRight = settings.rightmargin,
+		chartMarginLeft = settings.leftmargin,
+		chartMarginTop = settings.topmargin,
+		chartMarginBottom = settings.bottommargin,
+		chartTransitionDuration = settings.charttransition,
+		numTics = settings.numTics_yaxis,
+		max_modifier = settings.max_modifier,
+		max_scale = settings.max_scale_factor;
+		this.Xlabel = settings.x_label;
+		this.Ylabel = settings.y_label;
+	}
+
+	if(data) {
+		var i = 0;
+		for(var name in data) {
+			if(data[name] === "true") {
+				layers[i] = this.wiki.getTiddlerData(name).data;
+				i++;
+			}
+		}
+		n = layers.length;
+		if(layers[0]) {
+			m = layers[0].length;
+			for(i=0; i<layers.length; i++) {
+				if(layers[i].length > m) {
+					m = layers[i].length;
+				}
+			}
+		}
+	}
+
 	// Calculate the maximum data values
-	var yGroupMax = d3.max(layers, function(layer) { return d3.max(layer, function(d) { return d.y; }); }),
-		yStackMax = d3.max(layers, function(layer) { return d3.max(layer, function(d) { return d.y0 + d.y; }); });
+	var yGroupMax = max_modifier + max_scale*d3.max(layers, function(layer) { return d3.max(layer, function(d) { return d.y; }); }),
+		yStackMax = d3.max(layers, function(layer) { return d3.max(layer, function(d) { return d.y; }); });
 	// Calculate margins and width and height
-	var margin = {top: 40, right: 10, bottom: 20, left: 10},
-		width = 960 - margin.left - margin.right,
-		height = 500 - margin.top - margin.bottom;
+	var margin = {top: chartMarginTop, right: chartMarginRight, bottom: chartMarginBottom, left: chartMarginLeft},
+		width = chartWidth - margin.left - margin.right,
+		height = chartHeight - margin.top - margin.bottom;
 	// x-scale
 	var x = d3.scale.ordinal()
 		.domain(d3.range(m))
-		.rangeRoundBands([0, width], 0.08);
+		.rangeBands([0, width], 0.08);
 	// y-scale
 	var y = d3.scale.linear()
-		.domain([0, yStackMax])
+		.domain([0, yGroupMax])
 		.range([height, 0]);
 	// Array of colour values
 	var color = d3.scale.linear()
@@ -84,9 +132,16 @@ BarWidget.prototype.createChart = function(parent,nextSibling) {
 		.tickSize(0)
 		.tickPadding(6)
 		.orient("bottom");
+	// y-axis
+	var yAxis = d3.svg.axis()
+	    .scale(y)
+		.tickSize(0)
+		.tickPadding(6)
+	    .orient("left")
+	    .ticks(numTics);
 	// Create SVG element
 	var svgElement = d3.select(parent).insert("svg",function() {return nextSibling;})
-		.attr("viewBox", "0 0 960 500")
+		.attr("viewBox", "0 0 960 10")
 		.attr("preserveAspectRatio", "xMinYMin meet")
 		.attr("width", width + margin.left + margin.right)
 		.attr("height", height + margin.top + margin.bottom);
@@ -110,13 +165,26 @@ BarWidget.prototype.createChart = function(parent,nextSibling) {
 	// Transition the rectangles to their final height
 	rect.transition()
 		.delay(function(d, i) { return i * 10; })
-		.attr("y", function(d) { return y(d.y0 + d.y); })
-		.attr("height", function(d) { return y(d.y0) - y(d.y0 + d.y); });
+		.attr("y", function(d) { return y(d.y); })
+		.attr("height", function(d) { return y(d.y); });
 	// Add to the DOM
 	mainGroup.append("g")
 		.attr("class", "x axis")
 		.attr("transform", "translate(0," + height + ")")
-		.call(xAxis);
+		.call(xAxis)
+	  .append("text")
+	  	.attr("transform", "translate(0, 30)")
+	  	//.style("text-anchor", "end")
+	  	.text(this.Xlabel);
+	mainGroup.append("g")
+	    .attr("class", "y axis")
+	    .call(yAxis)
+	  .append("text")
+	    .attr("transform", "rotate(-90)")
+	    .attr("y", 6)
+	    .attr("dy", ".71em")
+	    .style("text-anchor", "end")
+	    .text(this.Ylabel);
 	var self = this;
 	// Return the svg node
 	return {
@@ -133,43 +201,41 @@ BarWidget.prototype.createChart = function(parent,nextSibling) {
 	function transitionGrouped() {
 		y.domain([0, yGroupMax]);
 		rect.transition()
-			.duration(500)
+			.duration(chartTransitionDuration)
 			.delay(function(d, i) { return i * 10; })
 			.attr("x", function(d, i, j) { return x(d.x) + x.rangeBand() / n * j; })
 			.attr("width", x.rangeBand() / n)
 			.transition()
-			.attr("y", function(d) { return y(d.y); })
-			.attr("height", function(d) { return height - y(d.y); });
+			.attr("y", function(d) { return y(0+d.y); })
+			.attr("height", function(d) { return y(0)-y(d.y); })
 	}
 
-	function transitionStacked() {
-		y.domain([0, yStackMax]);
+/*
+	function transitionGrouped() {
+		y.domain([yGroupMax, 0]);
 		rect.transition()
-			.duration(500)
+			.duration(chartTransitionDuration)
 			.delay(function(d, i) { return i * 10; })
-			.attr("y", function(d) { return y(d.y0 + d.y); })
-			.attr("height", function(d) { return y(d.y0) - y(d.y0 + d.y); })
+			.attr("x", function(d, i, j) { return x(d.x) + x.rangeBand() / n * j; })
+			.attr("width", x.rangeBand() / n)
+			.transition()
+			.attr("y", function(d) { return y(0+d.y); })
+			.attr("height", function(d) { return y(0)-y(d.y); })
+	}
+*/
+
+		function transitionStacked() {
+			y.domain([yStackMax,0]);
+			rect.transition()
+			.duration(chartTransitionDuration)
+			.delay(function(d, i) { return i * 10; })
+			.attr("y", function(d) { return y(0+d.y); })
+			.attr("height", function(d) { return y(0)-y(d.y); })
 			.transition()
 			.attr("x", function(d) { return x(d.x); })
 			.attr("width", x.rangeBand());
 	}
 
-	// Inspired by Lee Byron's test data generator.
-	function bumpLayer(n, o) {
-		function bump(a) {
-			var x = 1 / (0.1 + Math.random()),
-				y = 2 * Math.random() - 0.5,
-				z = 10 / (0.1 + Math.random());
-			for (var i = 0; i < n; i++) {
-			var w = (i / n - y) * z;
-			a[i] += x * Math.exp(-w * w);
-			}
-		}
-		var a = [], i;
-		for (i = 0; i < n; ++i) a[i] = o + o * Math.random();
-		for (i = 0; i < 5; ++i) bump(a);
-		return a.map(function(d, i) { return {x: i, y: Math.max(0, d)}; });
-	}
 };
 
 /*
@@ -177,8 +243,10 @@ Compute the internal state of the widget
 */
 BarWidget.prototype.execute = function() {
 	// Get the parameters from the attributes
-	this.barData = this.getAttribute("data");
-	this.barGrouped = this.getAttribute("grouped","no");
+	this.chartName = this.getAttribute("name");
+	this.barData = this.getAttribute("datasets");
+	this.settingsTiddler = this.getAttribute("settings");
+	this.barGrouped = this.getAttribute("grouped","yes");
 };
 
 /*
@@ -186,7 +254,14 @@ Selectively refreshes the widget if needed. Returns true if the widget or any of
 */
 BarWidget.prototype.refresh = function(changedTiddlers) {
 	var changedAttributes = this.computeAttributes();
-	if(changedAttributes.data || changedTiddlers[this.barData]) {
+	var data = this.wiki.getTiddlerData(this.barData);
+	for(var name in data) {
+		if(changedTiddlers[name]) {
+			this.refreshSelf();
+			return true;
+		}
+	}
+	if(changedAttributes.data || changedTiddlers[this.barData] || changedTiddlers[this.settingsTiddler]) {
 		this.refreshSelf();
 		return true;
 	} else if(changedAttributes.grouped) {
